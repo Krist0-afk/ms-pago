@@ -1,0 +1,58 @@
+server:
+  port: 8089
+
+spring:
+  application:
+    name: pago
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://login.microsoftonline.com/8ea291c8-4670-4598-8f0f-b5e216b5b755/v2.0
+          audiences: c6445b4c-7863-42ac-a620-2fa3b5ea58d8
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:pagos_db}
+    username: ${DB_USER:postgres}
+    password: ${DB_PASS:postgres}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+
+  # Kafka: publica el resultado de cada intento de pago
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092,localhost:9093,localhost:9094}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
+      # acks=all + idempotencia: el pago queda en todas las réplicas en sincronía y sin duplicados
+      acks: all
+      retries: 5
+      compression-type: lz4
+      properties:
+        enable.idempotence: true
+        linger.ms: 5
+        delivery.timeout.ms: 30000
+        request.timeout.ms: 10000
+        max.block.ms: 5000
+        spring.json.add.type.headers: false
+
+app:
+  security:
+    cognito:
+      issuer-uri: ${COGNITO_ISSUER:https://cognito-idp.us-east-1.amazonaws.com/us-east-1_GrYPmcDNr}
+      client-id: ${COGNITO_CLIENT_ID:60r3m35l2uqmmlfk5r1j5unhmo}
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:4200,https://44.207.141.228}
+  kafka:
+    topicos:
+      pagos: pedidos360.pagos
+  pagos:
+    # Clave para el hash de la tarjeta (HMAC-SHA256). Nunca se guarda el número completo.
+    secreto-hash: ${PAGO_HASH_SECRET:cambiar-este-secreto}
+    antifraude:
+      # Más de 3 intentos con la misma tarjeta en 10 segundos => se bloquea
+      max-intentos: 3
+      ventana-segundos: 10
+    # Cada cuánto se reintenta publicar los eventos que no llegaron a Kafka
+    reintento-eventos-ms: 30000
