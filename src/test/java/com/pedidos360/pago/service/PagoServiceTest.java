@@ -145,6 +145,22 @@ class PagoServiceTest {
     }
 
     @Test
+    void reintentarLaMismaOrdenTambienCuentaParaElAntifraude() {
+        // Como en Postman: la misma orden y la misma tarjeta, varias veces seguidas
+        PagoRequest mismo = new PagoRequest(700L, 7990.0, VISA, "Ana", "12/30", "123");
+        assertThat(pagoService.pagar(mismo, "ana@duocuc.cl").getEstado()).isEqualTo(EstadoPago.APROBADO);
+        assertThatThrownBy(() -> pagoService.pagar(mismo, "ana@duocuc.cl")).isInstanceOf(PagoInvalidoException.class);
+        assertThatThrownBy(() -> pagoService.pagar(mismo, "ana@duocuc.cl")).isInstanceOf(PagoInvalidoException.class);
+
+        Pago cuarto = pagoService.pagar(mismo, "ana@duocuc.cl");
+
+        assertThat(cuarto.getEstado()).isEqualTo(EstadoPago.BLOQUEADO_FRAUDE);
+        assertThat(alertaRepository.findAll()).hasSize(1);
+        // Los reintentos sobre la orden pagada no se publican: solo el aprobado y el bloqueo
+        verify(publisher, times(2)).publicar(any());
+    }
+
+    @Test
     void ordenYaPagadaNoSePuedePagarDeNuevo() {
         pagoService.pagar(new PagoRequest(500L, 1000.0, VISA, "Ana", "12/30", "123"), "ana@duocuc.cl");
 

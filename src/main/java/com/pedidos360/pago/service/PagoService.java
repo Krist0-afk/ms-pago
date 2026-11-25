@@ -54,10 +54,6 @@ public class PagoService {
         if (tarjetaService.vencida(request.vencimiento(), YearMonth.now(clock.withZone(ZoneId.of("America/Santiago"))))) {
             throw new PagoInvalidoException("La tarjeta está vencida");
         }
-        if (pagoRepository.existsByOrdenIdAndEstado(request.ordenId(), EstadoPago.APROBADO)) {
-            throw new PagoInvalidoException("La orden #" + request.ordenId() + " ya está pagada");
-        }
-
         String hash = tarjetaService.hash(request.numeroTarjeta());
         String ultimos4 = tarjetaService.ultimos4(request.numeroTarjeta());
 
@@ -73,6 +69,13 @@ public class PagoService {
                         previos + 1, antifraudeService.getVentanaSegundos()));
                 log.warn("[ANTIFRAUDE] Bloqueado el pago de la orden #{}: tarjeta ****{} usada {} veces en {} s (usuario {})",
                         request.ordenId(), ultimos4, previos + 1, antifraudeService.getVentanaSegundos(), usuarioEmail);
+            } else if (pagoRepository.existsByOrdenIdAndEstado(request.ordenId(), EstadoPago.APROBADO)) {
+                // El intento se guarda para que cuente en la ventana antifraude, pero no se publica:
+                // no cambia nada de la orden, que ya estaba pagada
+                pago.resolver(EstadoPago.RECHAZADO, "La orden ya estaba pagada");
+                pago.setEventoPublicado(true);
+                pagoRepository.save(pago);
+                throw new PagoInvalidoException("La orden #" + request.ordenId() + " ya está pagada");
             } else if (ultimos4.equals(SUFIJO_SIN_FONDOS)) {
                 pago.resolver(EstadoPago.RECHAZADO, "Fondos insuficientes");
             } else {

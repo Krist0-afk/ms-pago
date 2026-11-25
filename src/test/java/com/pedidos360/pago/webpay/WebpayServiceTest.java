@@ -11,6 +11,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -21,7 +22,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 // Flujo de Webpay con la base H2 y Transbank simulado
-@SpringBootTest(properties = "app.webpay.url-frontend=https://front.test")
+@SpringBootTest(properties = {"app.webpay.url-frontend=https://front.test",
+        "app.cors.allowed-origins=https://front.test,https://otro-front.test"})
 class WebpayServiceTest {
 
     @Autowired
@@ -36,9 +38,13 @@ class WebpayServiceTest {
     @MockitoBean
     private PagoEventPublisher publisher;
 
+    @Autowired
+    private com.pedidos360.pago.repository.AlertaFraudeRepository alertaRepository;
+
     @BeforeEach
     void preparar() {
         pagoRepository.deleteAll();
+        alertaRepository.deleteAll();
         when(cliente.crear(anyString(), anyString(), anyLong(), anyString()))
                 .thenReturn(new WebpayCliente.Creacion("tok-1", "https://webpay3gint.transbank.cl/webpayserver/initTransaction"));
     }
@@ -113,5 +119,38 @@ class WebpayServiceTest {
     @Test
     void tokenDesconocidoVuelveAlFrontConError() {
         assertThat(webpay.retorno("no-existe", null, null)).isEqualTo("https://front.test/ordenes?pago=error");
+    }
+
+    @Test
+    void cuartoWebpayEnDiezSegundosSeBloquea() {
+        webpay.iniciar(10L, 7990.0, "ana@duocuc.cl");
+        webpay.iniciar(10L, 7990.0, "ana@duocuc.cl");
+        webpay.iniciar(10L, 7990.0, "ana@duocuc.cl");
+
+        assertThatThrownBy(() -> webpay.iniciar(10L, 7990.0, "ana@duocuc.cl"))
+                .isInstanceOf(com.pedidos360.pago.service.FraudeException.class);
+
+        assertThat(pagoRepository.findAll()).filteredOn(p -> p.getEstado() == EstadoPago.BLOQUEADO_FRAUDE).hasSize(1);
+        assertThat(alertaRepository.findAll()).hasSize(1);
+        // El bloqueo se publica en Kafka (el dashboard lo muestra); los pendientes no
+        verify(publisher, times(1)).publicar(any());
+        // Otro usuario no se ve afectado
+        assertThat(webpay.iniciar(11L, 7990.0, "otro@duocuc.cl").token()).isEqualTo("tok-1");
+    }
+
+    @Test
+    void vuelveAlOrigenDesdeElQueSeInicioElPago() {
+        webpay.iniciar(10L, 7990.0, "ana@duocuc.cl", "https://otro-front.test");
+        when(cliente.confirmar("tok-1")).thenReturn(confirmacion("AUTHORIZED", 0));
+
+        assertThat(webpay.retorno("tok-1", null, null)).startsWith("https://otro-front.test/ordenes?pago=aprobado");
+    }
+
+    @Test
+    void ignoraUnOrigenQueNoEstaPermitido() {
+        webpay.iniciar(10L, 7990.0, "ana@duocuc.cl", "https://sitio-malicioso.test");
+        when(cliente.confirmar("tok-1")).thenReturn(confirmacion("AUTHORIZED", 0));
+
+        assertThat(webpay.retorno("tok-1", null, null)).startsWith("https://front.test/ordenes?pago=aprobado");
     }
 }

@@ -9,6 +9,9 @@ import java.time.Instant;
 
 // Regla antifraude: una misma tarjeta usada más de N veces dentro de la ventana se bloquea.
 // La decisión es síncrona (antes de aprobar) porque el bloqueo debe ser preventivo.
+// Cuenta todos los intentos guardados con esa tarjeta, también los de una orden que ya estaba pagada.
+// En Webpay el número de la tarjeta se escribe en Transbank y nunca llega aquí, así que la misma
+// regla se aplica por usuario: más de N pagos Webpay iniciados dentro de la ventana.
 @Service
 public class AntifraudeService {
 
@@ -30,6 +33,12 @@ public class AntifraudeService {
     public long intentosRecientes(String tarjetaHash) {
         Instant desde = clock.instant().minusSeconds(ventanaSegundos);
         return pagoRepository.countByTarjetaHashAndCreadoEnAfter(tarjetaHash, desde);
+    }
+
+    // Pagos Webpay que el usuario inició dentro de la ventana, sin contar el actual
+    public long intentosWebpayRecientes(String usuarioEmail) {
+        Instant desde = clock.instant().minusSeconds(ventanaSegundos);
+        return pagoRepository.countByUsuarioEmailAndMetodoAndCreadoEnAfter(usuarioEmail, "WEBPAY", desde);
     }
 
     // Con el intento actual, ¿la tarjeta supera el máximo permitido?

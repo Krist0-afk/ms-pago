@@ -45,6 +45,9 @@ public class Pago {
     @Column(length = 26)
     private String ordenCompra;
     private String codigoAutorizacion;
+    // Origen del frontend desde el que se inició el pago (vuelve ahí al terminar)
+    @Column(length = 200)
+    private String urlFrontend;
 
     public Pago() {
     }
@@ -64,6 +67,9 @@ public class Pago {
         pago.estado = EstadoPago.PENDIENTE;
         return pago;
     }
+
+    public void setUrlFrontend(String urlFrontend) { this.urlFrontend = urlFrontend; }
+    public String getUrlFrontend() { return urlFrontend; }
 
     public void iniciarWebpay(String token, String ordenCompra) {
         this.webpayToken = token;

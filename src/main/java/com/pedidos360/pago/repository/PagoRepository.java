@@ -11,6 +11,8 @@ import java.util.Optional;
 public interface PagoRepository extends JpaRepository<Pago, Long> {
 
     // Intentos con la misma tarjeta dentro de la ventana antifraude
+    long countByUsuarioEmailAndMetodoAndCreadoEnAfter(String usuarioEmail, String metodo, Instant desde);
+
     long countByTarjetaHashAndCreadoEnAfter(String tarjetaHash, Instant desde);
 
     List<Pago> findByUsuarioEmailOrderByCreadoEnDesc(String usuarioEmail);

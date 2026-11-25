@@ -5,6 +5,7 @@ import com.pedidos360.pago.dto.PagoResponse;
 import com.pedidos360.pago.dto.WebpayRequest;
 import com.pedidos360.pago.model.AlertaFraude;
 import com.pedidos360.pago.model.Pago;
+import com.pedidos360.pago.service.FraudeException;
 import com.pedidos360.pago.service.PagoInvalidoException;
 import com.pedidos360.pago.service.PagoService;
 import com.pedidos360.pago.webpay.WebpayService;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -58,8 +60,10 @@ public class PagoController {
 
     // Inicia un pago con Webpay Plus: el frontend envía al cliente a la URL con el token
     @PostMapping("/webpay")
-    public ResponseEntity<WebpayService.Inicio> iniciarWebpay(@Valid @RequestBody WebpayRequest request, Authentication auth) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(webpayService.iniciar(request.ordenId(), request.monto(), auth.getName()));
+    public ResponseEntity<WebpayService.Inicio> iniciarWebpay(@Valid @RequestBody WebpayRequest request, Authentication auth,
+                                                              @RequestHeader(name = "Origin", required = false) String origen) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(webpayService.iniciar(request.ordenId(), request.monto(), auth.getName(), origen));
     }
 
     // Transbank vuelve aquí (GET o POST según el caso) y el cliente se redirige al frontend con el resultado
@@ -79,6 +83,11 @@ public class PagoController {
     @GetMapping("/alertas")
     public List<AlertaFraude> alertas() {
         return pagoService.alertas();
+    }
+
+    @ExceptionHandler(FraudeException.class)
+    public ResponseEntity<Map<String, String>> fraude(FraudeException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", ex.getMessage()));
     }
 
     @ExceptionHandler(PagoInvalidoException.class)

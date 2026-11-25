@@ -1,9 +1,13 @@
 package com.pedidos360.pago.webpay;
 
 import com.pedidos360.pago.messaging.producer.PagoEventPublisher;
+import com.pedidos360.pago.model.AlertaFraude;
 import com.pedidos360.pago.model.EstadoPago;
 import com.pedidos360.pago.model.Pago;
+import com.pedidos360.pago.repository.AlertaFraudeRepository;
 import com.pedidos360.pago.repository.PagoRepository;
+import com.pedidos360.pago.service.AntifraudeService;
+import com.pedidos360.pago.service.FraudeException;
 import com.pedidos360.pago.service.PagoInvalidoException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,13 +16,17 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 
 import java.time.Clock;
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 // Pago con Webpay Plus:
 // 1. iniciar(): se registra el pago PENDIENTE y se crea la transacción en Transbank.
 // 2. El frontend envía al cliente al formulario de Webpay (POST con token_ws).
 // 3. retorno(): Transbank devuelve al cliente a este microservicio; se confirma la transacción,
 //    el pago queda APROBADO o RECHAZADO, se publica en Kafka y el cliente vuelve al frontend.
+// El frontend se publica en dos orígenes (la Elastic IP y el API Gateway de frontend): el cliente
+// vuelve al mismo desde el que inició el pago, siempre que esté entre los orígenes permitidos.
 @Service
 public class WebpayService {
 
@@ -30,26 +38,52 @@ public class WebpayService {
     private final Clock clock;
     private final String urlRetorno;
     private final String urlFrontend;
+    private final List<String> origenesPermitidos;
+    private final AntifraudeService antifraude;
+    private final AlertaFraudeRepository alertaRepository;
+    // Un candado por usuario: varios inicios simultáneos se cuentan en orden
+    private final ConcurrentHashMap<String, Object> candados = new ConcurrentHashMap<>();
 
     public WebpayService(WebpayCliente cliente, PagoRepository pagoRepository, PagoEventPublisher publisher, Clock clock,
                          @Value("${app.webpay.url-retorno}") String urlRetorno,
-                         @Value("${app.webpay.url-frontend}") String urlFrontend) {
+                         @Value("${app.webpay.url-frontend}") String urlFrontend,
+                         @Value("${app.cors.allowed-origins}") List<String> origenesPermitidos,
+                         AntifraudeService antifraude, AlertaFraudeRepository alertaRepository) {
         this.cliente = cliente;
         this.pagoRepository = pagoRepository;
         this.publisher = publisher;
         this.clock = clock;
         this.urlRetorno = urlRetorno;
         this.urlFrontend = urlFrontend;
+        this.origenesPermitidos = origenesPermitidos;
+        this.antifraude = antifraude;
+        this.alertaRepository = alertaRepository;
     }
 
     public record Inicio(Long pagoId, String token, String url) {
     }
 
     public Inicio iniciar(Long ordenId, Double monto, String usuarioEmail) {
+        return iniciar(ordenId, monto, usuarioEmail, null);
+    }
+
+    public Inicio iniciar(Long ordenId, Double monto, String usuarioEmail, String origen) {
         if (pagoRepository.existsByOrdenIdAndEstado(ordenId, EstadoPago.APROBADO)) {
             throw new PagoInvalidoException("La orden #" + ordenId + " ya está pagada");
         }
-        Pago pago = pagoRepository.save(Pago.webpay(ordenId, usuarioEmail, monto, clock.instant()));
+        Pago pago;
+        synchronized (candados.computeIfAbsent(usuarioEmail, k -> new Object())) {
+            long previos = antifraude.intentosWebpayRecientes(usuarioEmail);
+            Pago nuevo = Pago.webpay(ordenId, usuarioEmail, monto, clock.instant());
+            if (antifraude.esFraude(previos)) {
+                bloquear(nuevo, previos + 1);
+            }
+            // Solo se guarda un origen conocido: así el retorno no puede redirigir a cualquier sitio
+            if (origen != null && origenesPermitidos.contains(origen)) {
+                nuevo.setUrlFrontend(origen);
+            }
+            pago = pagoRepository.save(nuevo);
+        }
         // buy_order admite hasta 26 caracteres
         String ordenCompra = "P360-" + ordenId + "-" + pago.getId();
         try {
@@ -64,6 +98,18 @@ public class WebpayService {
             log.error("No se pudo crear la transacción Webpay de la orden #{}: {}", ordenId, e.getMessage());
             throw new PagoInvalidoException("Webpay no está disponible, intenta más tarde");
         }
+    }
+
+    private void bloquear(Pago pago, long intentos) {
+        int ventana = antifraude.getVentanaSegundos();
+        pago.resolver(EstadoPago.BLOQUEADO_FRAUDE, "Webpay iniciado " + intentos + " veces en " + ventana + " segundos");
+        pago = pagoRepository.save(pago);
+        alertaRepository.save(new AlertaFraude(null, null, pago.getUsuarioEmail(), pago.getOrdenId(), intentos, ventana));
+        log.warn("[ANTIFRAUDE] Bloqueado el pago Webpay de la orden #{}: {} intentos en {} s (usuario {})",
+                pago.getOrdenId(), intentos, ventana, pago.getUsuarioEmail());
+        publisher.publicar(pago);
+        throw new FraudeException("Pago bloqueado por seguridad: demasiados intentos en " + ventana
+                + " segundos. Espera un momento e intenta de nuevo.");
     }
 
     // Devuelve la URL del frontend a la que se redirige al cliente
@@ -90,7 +136,7 @@ public class WebpayService {
         Pago pago = encontrado.get();
         if (pago.getEstado() != EstadoPago.PENDIENTE) {
             // El cliente recargó la página de retorno: el pago ya estaba resuelto
-            return urlFrontend + "/ordenes?pago=" + (pago.getEstado() == EstadoPago.APROBADO ? "aprobado" : "rechazado")
+            return frontDe(pago) + "/ordenes?pago=" + (pago.getEstado() == EstadoPago.APROBADO ? "aprobado" : "rechazado")
                     + "&orden=" + pago.getOrdenId();
         }
         try {
@@ -114,6 +160,10 @@ public class WebpayService {
             log.info("Pago Webpay #{} de la orden #{}: {}", pago.getId(), pago.getOrdenId(), estado);
             publisher.publicar(pago);
         }
-        return urlFrontend + "/ordenes?pago=" + resultado + "&orden=" + pago.getOrdenId();
+        return frontDe(pago) + "/ordenes?pago=" + resultado + "&orden=" + pago.getOrdenId();
+    }
+
+    private String frontDe(Pago pago) {
+        return pago.getUrlFrontend() != null ? pago.getUrlFrontend() : urlFrontend;
     }
 }
