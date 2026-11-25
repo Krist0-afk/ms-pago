@@ -38,6 +38,14 @@ public class Pago {
     // false mientras el evento no se haya confirmado en Kafka (se reintenta)
     private boolean eventoPublicado;
 
+    // TARJETA (pago simulado) o WEBPAY (Transbank, ambiente de integración)
+    private String metodo;
+    @Column(length = 64)
+    private String webpayToken;
+    @Column(length = 26)
+    private String ordenCompra;
+    private String codigoAutorizacion;
+
     public Pago() {
     }
 
@@ -49,6 +57,29 @@ public class Pago {
         this.ultimos4 = ultimos4;
         this.creadoEn = creadoEn;
     }
+
+    public static Pago webpay(Long ordenId, String usuarioEmail, Double monto, Instant creadoEn) {
+        Pago pago = new Pago(ordenId, usuarioEmail, monto, null, null, creadoEn);
+        pago.metodo = "WEBPAY";
+        pago.estado = EstadoPago.PENDIENTE;
+        return pago;
+    }
+
+    public void iniciarWebpay(String token, String ordenCompra) {
+        this.webpayToken = token;
+        this.ordenCompra = ordenCompra;
+    }
+
+    public void autorizarWebpay(String ultimos4, String codigoAutorizacion) {
+        this.ultimos4 = ultimos4;
+        this.codigoAutorizacion = codigoAutorizacion;
+    }
+
+    public void setMetodo(String metodo) { this.metodo = metodo; }
+    public String getMetodo() { return metodo != null ? metodo : "TARJETA"; }
+    public String getWebpayToken() { return webpayToken; }
+    public String getOrdenCompra() { return ordenCompra; }
+    public String getCodigoAutorizacion() { return codigoAutorizacion; }
 
     public void resolver(EstadoPago estado, String motivo) {
         this.estado = estado;

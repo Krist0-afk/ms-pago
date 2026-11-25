@@ -1,6 +1,7 @@
 package com.pedidos360.pago.messaging.producer;
 
 import com.pedidos360.pago.dto.PagoEvent;
+import com.pedidos360.pago.model.EstadoPago;
 import com.pedidos360.pago.model.Pago;
 import com.pedidos360.pago.repository.PagoRepository;
 import org.slf4j.Logger;
@@ -34,7 +35,7 @@ public class PagoEventPublisher {
     public void publicar(Pago pago) {
         PagoEvent evento = PagoEvent.de(pago);
         try {
-            kafkaTemplate.send(topico, evento.tarjetaHash(), evento).whenComplete((resultado, error) -> {
+            kafkaTemplate.send(topico, clave(evento), evento).whenComplete((resultado, error) -> {
                 if (error != null) {
                     log.warn("Pago #{} ({}) no llegó a Kafka, se reintentará: {}", pago.getId(), evento.estado(), error.getMessage());
                     return;
@@ -53,10 +54,17 @@ public class PagoEventPublisher {
 
     @Scheduled(fixedDelayString = "${app.pagos.reintento-eventos-ms}", initialDelayString = "${app.pagos.reintento-eventos-ms}")
     public void reintentarPendientes() {
-        var pendientes = pagoRepository.findTop50ByEventoPublicadoFalseAndCreadoEnBeforeOrderByCreadoEn(Instant.now().minusSeconds(10));
+        var pendientes = pagoRepository.findTop50ByEventoPublicadoFalseAndEstadoNotAndCreadoEnBeforeOrderByCreadoEn(
+                EstadoPago.PENDIENTE, Instant.now().minusSeconds(10));
         if (!pendientes.isEmpty()) {
             log.info("Reintentando la publicación de {} pagos pendientes", pendientes.size());
             pendientes.forEach(this::publicar);
         }
+    }
+
+    // Pago con tarjeta: el hash de la tarjeta (sus intentos quedan en orden en una partición).
+    // Webpay no entrega el número de la tarjeta antes de pagar: se usa la orden.
+    private static String clave(PagoEvent evento) {
+        return evento.tarjetaHash() != null ? evento.tarjetaHash() : "orden-" + evento.ordenId();
     }
 }

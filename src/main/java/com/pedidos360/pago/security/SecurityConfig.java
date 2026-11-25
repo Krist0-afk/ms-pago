@@ -37,6 +37,8 @@ public class SecurityConfig {
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .authorizeHttpRequests(authorize -> authorize
                 .requestMatchers("/api/v1/pagos/health").permitAll()
+                // Transbank devuelve aquí al cliente (sin JWT); el token de Webpay se valida contra Transbank
+                .requestMatchers("/api/v1/pagos/webpay/retorno").permitAll()
                 .requestMatchers("/api/v1/pagos/alertas").hasRole("Admin")
                 .anyRequest().hasRole("User")
             )

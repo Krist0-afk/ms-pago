@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 public interface PagoRepository extends JpaRepository<Pago, Long> {
 
@@ -18,6 +19,10 @@ public interface PagoRepository extends JpaRepository<Pago, Long> {
 
     boolean existsByOrdenIdAndEstado(Long ordenId, EstadoPago estado);
 
-    // Pagos cuyo evento todavía no se confirmó en Kafka
-    List<Pago> findTop50ByEventoPublicadoFalseAndCreadoEnBeforeOrderByCreadoEn(Instant antesDe);
+    // Pagos ya resueltos cuyo evento todavía no se confirmó en Kafka
+    List<Pago> findTop50ByEventoPublicadoFalseAndEstadoNotAndCreadoEnBeforeOrderByCreadoEn(EstadoPago estado, Instant antesDe);
+
+    Optional<Pago> findByWebpayToken(String webpayToken);
+
+    Optional<Pago> findByOrdenCompra(String ordenCompra);
 }

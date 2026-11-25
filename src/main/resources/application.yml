@@ -56,3 +56,14 @@ app:
       ventana-segundos: 10
     # Cada cuánto se reintenta publicar los eventos que no llegaron a Kafka
     reintento-eventos-ms: 30000
+
+  # Webpay Plus (Transbank). Por defecto, ambiente de integración con el comercio de prueba
+  # público de Transbank; en producción se reemplazan por las credenciales del comercio.
+  webpay:
+    url: ${WEBPAY_URL:https://webpay3gint.transbank.cl}
+    codigo-comercio: ${WEBPAY_CODIGO_COMERCIO:597055555532}
+    api-key: ${WEBPAY_API_KEY:579B532A7440BB0C9079DED94D31EA1615BACEB56610332264630D42D0A36B1C}
+    # Transbank devuelve al cliente a esta URL (ruta pública del API Gateway hacia ms-pago)
+    url-retorno: ${WEBPAY_URL_RETORNO:http://localhost:8089/api/v1/pagos/webpay/retorno}
+    # Pantalla del frontend a la que vuelve el cliente con el resultado
+    url-frontend: ${FRONT_URL:http://localhost:4200}

@@ -2,10 +2,12 @@ package com.pedidos360.pago.controller;
 
 import com.pedidos360.pago.dto.PagoRequest;
 import com.pedidos360.pago.dto.PagoResponse;
+import com.pedidos360.pago.dto.WebpayRequest;
 import com.pedidos360.pago.model.AlertaFraude;
 import com.pedidos360.pago.model.Pago;
 import com.pedidos360.pago.service.PagoInvalidoException;
 import com.pedidos360.pago.service.PagoService;
+import com.pedidos360.pago.webpay.WebpayService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -16,8 +18,11 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.net.URI;
 import java.util.List;
 import java.util.Map;
 
@@ -26,9 +31,11 @@ import java.util.Map;
 public class PagoController {
 
     private final PagoService pagoService;
+    private final WebpayService webpayService;
 
-    public PagoController(PagoService pagoService) {
+    public PagoController(PagoService pagoService, WebpayService webpayService) {
         this.pagoService = pagoService;
+        this.webpayService = webpayService;
     }
 
     @GetMapping("/health")
@@ -44,8 +51,24 @@ public class PagoController {
             case APROBADO -> HttpStatus.CREATED;
             case RECHAZADO -> HttpStatus.PAYMENT_REQUIRED;
             case BLOQUEADO_FRAUDE -> HttpStatus.FORBIDDEN;
+            case PENDIENTE -> HttpStatus.ACCEPTED;
         };
         return ResponseEntity.status(estado).body(PagoResponse.de(pago));
+    }
+
+    // Inicia un pago con Webpay Plus: el frontend envía al cliente a la URL con el token
+    @PostMapping("/webpay")
+    public ResponseEntity<WebpayService.Inicio> iniciarWebpay(@Valid @RequestBody WebpayRequest request, Authentication auth) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(webpayService.iniciar(request.ordenId(), request.monto(), auth.getName()));
+    }
+
+    // Transbank vuelve aquí (GET o POST según el caso) y el cliente se redirige al frontend con el resultado
+    @RequestMapping(value = "/webpay/retorno", method = {RequestMethod.GET, RequestMethod.POST})
+    public ResponseEntity<Void> retornoWebpay(@RequestParam(name = "token_ws", required = false) String tokenWs,
+                                              @RequestParam(name = "TBK_TOKEN", required = false) String tbkToken,
+                                              @RequestParam(name = "TBK_ORDEN_COMPRA", required = false) String tbkOrdenCompra) {
+        String destino = webpayService.retorno(tokenWs, tbkToken, tbkOrdenCompra);
+        return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(destino)).build();
     }
 
     @GetMapping("/mios")
